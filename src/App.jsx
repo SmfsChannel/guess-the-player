@@ -1,76 +1,151 @@
-import { useEffect, useState } from "react"
-import { getPlayers } from "./api"
+import { useEffect, useState } from 'react'
+import { supabase } from './supabaseClient'
 
-// ⬇️ اللاعب الصحيح (اللي سجّل الهدف الحالي)
-const correctPlayer = {
-  name: "Rúben Neves",
-  nationality: "Portugal",
-  club: "Al-Hilal",
-  position: "Midfielder",
-  age: 26,
-}
-
-function App() {
-  const [players, setPlayers] = useState([])
-  const [guess, setGuess] = useState("")
-  const [hint, setHint] = useState(null)
+export default function App() {
+  const [userId, setUserId] = useState(localStorage.getItem('user_id') || '')
+  const [username, setUsername] = useState('')
+  const [video, setVideo] = useState(null)
+  const [guess, setGuess] = useState('')
+  const [hint, setHint] = useState('')
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    async function fetchPlayers() {
-      const data = await getPlayers()
-      setPlayers(data)
+    const savedId = localStorage.getItem('user_id')
+    if (savedId) {
+      setUserId(savedId)
+      loadNextVideo()
     }
-    fetchPlayers()
   }, [])
 
-  const handleGuess = () => {
-    // نبحث عن اللاعب اللي اسمه يشبه التخمين
-    const found = players.find(p =>
-      p.name.toLowerCase().includes(guess.toLowerCase())
-    )
+  async function registerUser() {
+    if (!username) return alert('اكتب اسم المستخدم')
 
-    if (!found) {
-      setHint("❌ لم يتم العثور على هذا اللاعب")
+    const { data: existing } = await supabase
+      .from('users')
+      .select()
+      .eq('username', username)
+      .single()
+
+    if (existing) {
+      localStorage.setItem('user_id', existing.id)
+      setUserId(existing.id)
+      loadNextVideo()
+    } else {
+      const { data, error } = await supabase
+        .from('users')
+        .insert([{ username }])
+        .select()
+        .single()
+
+      if (error) return alert('خطأ في التسجيل')
+      localStorage.setItem('user_id', data.id)
+      setUserId(data.id)
+      loadNextVideo()
+    }
+  }
+
+  async function loadNextVideo() {
+    setLoading(true)
+    const { data, error } = await supabase
+      .from('goals')
+      .select()
+      .order('created_at', { ascending: false })
+
+    if (error || !data || data.length === 0) {
+      setHint('لا يوجد مقاطع حاليا')
+      setLoading(false)
       return
     }
 
-    // مقارنة التلميحات
+    // اختيار هدف عشوائي
+    const random = data[Math.floor(Math.random() * data.length)]
+    setVideo(random)
+    setGuess('')
+    setHint('')
+    setLoading(false)
+  }
+
+  async function handleGuess() {
+    if (!guess || !video || !userId) return
+
+    const similarity = guess.toLowerCase().includes(video.correct_player.toLowerCase())
+    const isCorrect = similarity
+
     const hints = []
-    if (found.club === correctPlayer.club) hints.push("✅ النادي صحيح")
-    else hints.push("❌ النادي مختلف")
+    if (guess.toLowerCase() === video.correct_player.toLowerCase()) {
+      hints.push('✅ الاسم مطابق تمامًا')
+    } else if (similarity) {
+      hints.push('✅ الاسم قريب جدًا')
+    } else {
+      hints.push('❌ الاسم غير مطابق')
+    }
 
-    if (found.nationality === correctPlayer.nationality) hints.push("✅ الجنسية صحيحة")
-    else hints.push("❌ الجنسية مختلفة")
+    // تلميحات إضافية (عرض عام)
+    hints.push(`🏷 النادي: ${video.club}`)
+    hints.push(`🌍 الجنسية: ${video.nationality}`)
+    hints.push(`📌 المركز: ${video.position}`)
+    hints.push(`🎂 العمر: ${video.age}`)
 
-    if (found.position === correctPlayer.position) hints.push("✅ المركز صحيح")
-    else hints.push("❌ المركز مختلف")
+    setHint(hints.join('\n'))
 
-    if (found.age === correctPlayer.age) hints.push("✅ العمر مطابق")
-    else hints.push(`🔁 العمر تقريبي (الفرق ${Math.abs(found.age - correctPlayer.age)} سنوات)`)
+    // حساب النقاط
+    const points = isCorrect ? 10 : 0
 
-    setHint(hints.join("\n"))
+    // حفظ التخمين
+    await supabase.from('guesses').insert([
+      {
+        user_id: userId,
+        goal_id: video.id,
+        guessed_player: guess,
+        is_correct: isCorrect,
+        points_awarded: points
+      }
+    ])
+
+    // تحديث نقاط المستخدم
+    if (isCorrect) {
+      await supabase
+        .from('users')
+        .update({ score: supabase.rpc('increment_score', { user_id_input: userId, value: points }) })
+        .eq('id', userId)
+    }
+
+    // الانتقال للمرحلة التالية بعد ثواني
+    setTimeout(() => loadNextVideo(), 2000)
+  }
+
+  if (!userId) {
+    return (
+      <div style={{ padding: '2rem' }}>
+        <h2>🎮 أدخل اسم المستخدم للبدء:</h2>
+        <input value={username} onChange={e => setUsername(e.target.value)} />
+        <button onClick={registerUser}>ابدأ</button>
+      </div>
+    )
   }
 
   return (
-    <div style={{ padding: "2rem", fontFamily: "sans-serif" }}>
-      <h1>⚽ Guess the Player</h1>
-
-      <input
-        type="text"
-        placeholder="اكتب اسم اللاعب بالإنجليزي"
-        value={guess}
-        onChange={e => setGuess(e.target.value)}
-        style={{ padding: "0.5rem", fontSize: "1rem" }}
-      />
-      <button onClick={handleGuess} style={{ marginLeft: "1rem", padding: "0.5rem 1rem" }}>
-        خمن
-      </button>
-
-      <pre style={{ marginTop: "1rem", whiteSpace: "pre-wrap" }}>
-        {hint}
-      </pre>
+    <div style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
+      <h1>⚽ المرحلة الجديدة</h1>
+      {loading ? (
+        <p>جاري تحميل الفيديو...</p>
+      ) : (
+        video && (
+          <>
+            <video src={video.video_url} width="400" controls autoPlay muted></video>
+            <br />
+            <input
+              type="text"
+              placeholder="اكتب اسم اللاعب"
+              value={guess}
+              onChange={(e) => setGuess(e.target.value)}
+              style={{ padding: '0.5rem', fontSize: '1rem' }}
+            />
+            <button onClick={handleGuess} style={{ marginLeft: '1rem' }}>تأكيد التخمين</button>
+            <pre style={{ marginTop: '1rem', whiteSpace: 'pre-wrap' }}>{hint}</pre>
+          </>
+        )
+      )}
     </div>
   )
 }
-
-export default App
