@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from './supabaseClient'
+import Leaderboard from './Leaderboard'
 
 export default function App() {
   const [userId, setUserId] = useState(localStorage.getItem('user_id') || '')
@@ -8,11 +9,13 @@ export default function App() {
   const [guess, setGuess] = useState('')
   const [hint, setHint] = useState('')
   const [loading, setLoading] = useState(false)
+  const [score, setScore] = useState(0)
 
   useEffect(() => {
     const savedId = localStorage.getItem('user_id')
     if (savedId) {
       setUserId(savedId)
+      loadUserScore(savedId)
       loadNextVideo()
     }
   }, [])
@@ -29,6 +32,7 @@ export default function App() {
     if (existing) {
       localStorage.setItem('user_id', existing.id)
       setUserId(existing.id)
+      setScore(existing.score || 0)
       loadNextVideo()
     } else {
       const { data, error } = await supabase
@@ -40,8 +44,14 @@ export default function App() {
       if (error) return alert('خطأ في التسجيل')
       localStorage.setItem('user_id', data.id)
       setUserId(data.id)
+      setScore(0)
       loadNextVideo()
     }
+  }
+
+  async function loadUserScore(id) {
+    const { data, error } = await supabase.from('users').select('score').eq('id', id).single()
+    if (data) setScore(data.score || 0)
   }
 
   async function loadNextVideo() {
@@ -57,7 +67,6 @@ export default function App() {
       return
     }
 
-    // اختيار هدف عشوائي
     const random = data[Math.floor(Math.random() * data.length)]
     setVideo(random)
     setGuess('')
@@ -80,7 +89,6 @@ export default function App() {
       hints.push('❌ الاسم غير مطابق')
     }
 
-    // تلميحات إضافية (عرض عام)
     hints.push(`🏷 النادي: ${video.club}`)
     hints.push(`🌍 الجنسية: ${video.nationality}`)
     hints.push(`📌 المركز: ${video.position}`)
@@ -88,10 +96,8 @@ export default function App() {
 
     setHint(hints.join('\n'))
 
-    // حساب النقاط
     const points = isCorrect ? 10 : 0
 
-    // حفظ التخمين
     await supabase.from('guesses').insert([
       {
         user_id: userId,
@@ -102,15 +108,11 @@ export default function App() {
       }
     ])
 
-    // تحديث نقاط المستخدم
-    if (isCorrect) {
-      await supabase
-        .from('users')
-        .update({ score: supabase.rpc('increment_score', { user_id_input: userId, value: points }) })
-        .eq('id', userId)
+    if (isCorrect && points > 0) {
+      await supabase.from('users').update({ score: score + points }).eq('id', userId)
+      setScore(score + points)
     }
 
-    // الانتقال للمرحلة التالية بعد ثواني
     setTimeout(() => loadNextVideo(), 2000)
   }
 
@@ -127,6 +129,8 @@ export default function App() {
   return (
     <div style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
       <h1>⚽ المرحلة الجديدة</h1>
+      <p>النقاط: {score}</p>
+      <Leaderboard />
       {loading ? (
         <p>جاري تحميل الفيديو...</p>
       ) : (
